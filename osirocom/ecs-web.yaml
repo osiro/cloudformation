@@ -1,0 +1,75 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+  CoreStackName:
+    Type: String
+    Description: Core stack name
+    Default: prod-core
+  ECRImage:
+    Type: String
+    Description: The image to use for a container, which is passed directly to the Docker daemon
+
+Resources:
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family:
+        Fn::Join: [ '', [ 'osirocom-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' }, '-web' ] ]
+      NetworkMode: bridge
+      ContainerDefinitions:
+        - Name:
+            Fn::Join: [ '', [ 'osirocom-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' }, '-web' ] ]
+          Cpu: 128
+          Environment:
+            - Name: RAILS_ENV
+              Value:
+                Fn::ImportValue: !Sub '${CoreStackName}-Environment'
+          Essential: true
+          Image: !Ref ECRImage
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::Join: [ '', [ 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' }, '-web' ] ]
+              awslogs-region:
+                Fn::ImportValue:
+                  !Sub "${CoreStackName}-Region"
+              awslogs-stream-prefix: osirocom
+          Memory: 470
+          PortMappings:
+            - ContainerPort: 80
+              HostPort: 0
+              Protocol: tcp
+  OsirocomService:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster:
+        Fn::ImportValue:
+          !Sub "${CoreStackName}-WebCluster"
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+      DesiredCount: 2
+      LoadBalancers:
+        - ContainerName:
+            Fn::Join: [ '', [ 'osirocom-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' }, '-web' ] ]
+          ContainerPort: 80
+          TargetGroupArn:
+            Fn::ImportValue:
+              !Sub "${CoreStackName}-ECSTargetGroup"
+      PlacementStrategies:
+        - Type: spread
+          Field: attribute:ecs.availability-zone
+      Role:
+        Fn::ImportValue: !Sub "${CoreStackName}-ECSRoleEcsInstanceName"
+      ServiceName:
+          Fn::Join: [ '', [ 'osirocom-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' }, '-web' ] ]
+      TaskDefinition: !Ref TaskDefinition
+
+Outputs:
+  Service:
+    Description: Name of Web ECS service
+    Value: !GetAtt OsirocomService.Name
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-ECSWebService"

@@ -1,0 +1,449 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+# Pre-requisites:
+# 1. Add a user named "maintainer" with policies:
+#   1.1 arn:aws:iam::aws:policy/AmazonEC2FullAccess
+#   1.2 arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess
+#   1.3 AWSKeyManagementServiceDeployment custom policy with abilities to kms:Decrypt
+# 2. Add a KeyPair
+
+Parameters:
+  SshKey:
+    Type: AWS::EC2::KeyPair::KeyName
+    Description: Name of the ssh key to use
+  Region:
+    Type: String
+    Description: For AWS CLI. The region to use. Overrides config/env settings.
+    Default: us-west-2
+  AwsAccessKeyId:
+    Type: String
+    Description: AWS Access Key Id
+  AwsSecretAccessKey:
+    Type: String
+    Description: AWS Secret Access Key
+  AvailabilityZone1:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: First Availability Zone
+  AvailabilityZone2:
+    Type: AWS::EC2::AvailabilityZone::Name
+    Description: First Availability Zone
+  Environment:
+    Type: String
+    Description: Environment
+    Default: production
+  CertificateArn:
+    Type: String
+    Description: Certificate that you can use with AWS services to enable secure connections.
+
+Resources:
+  # Users, Groups, Roles and Policies
+  RoleEcsInstance:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2008-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+                - ecs.amazonaws.com
+                - application-autoscaling.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceRole
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole
+      RoleName: ecsInstanceRole
+  InstanceProfileEcsInstance:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Path: '/'
+      Roles:
+        - !Ref RoleEcsInstance
+
+  # VPC and Security Groups
+  VPC:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.0.0.0/16
+      InstanceTenancy: default
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Name
+          Value: !Ref Environment
+  InternetGateway:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Ref Environment
+  InternetGatewayAttachment:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref VPC
+      InternetGatewayId: !Ref InternetGateway
+  SecurityGroupPublic:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: Public
+      GroupDescription: Allow traffic from Internet to hosts
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'public', '-', !Ref Environment ] ]
+  SecurityGroupBastion:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: Bastion
+      GroupDescription: Allow traffic from Internet to Bastion
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 10.0.0.0/16
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'bastion-public', '-', !Ref Environment ] ]
+  SecurityGroupPrivate:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: Private
+      GroupDescription: Allow traffic from Bastion to hosts
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 0.0.0.0/0
+      SecurityGroupIngress:
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          CidrIp: 10.0.0.0/16
+        - IpProtocol: -1
+          FromPort: -1
+          ToPort: -1
+          SourceSecurityGroupId: !Ref SecurityGroupBastion
+      VpcId: !Ref VPC
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'private', '-', !Ref Environment ] ]
+
+  # Subnets: 2 public and 2 privates
+  SubnetPublicA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone1
+      CidrBlock: 10.0.10.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'public', '-', !Ref Environment, '-a' ] ]
+      VpcId: !Ref VPC
+  SubnetPublicB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone2
+      CidrBlock: 10.0.20.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'public', '-', !Ref Environment, '-b' ] ]
+      VpcId: !Ref VPC
+  SubnetPrivateA:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone1
+      CidrBlock: 10.0.11.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'private', '-', !Ref Environment, '-a' ] ]
+      VpcId: !Ref VPC
+  SubnetPrivateB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      AvailabilityZone: !Ref AvailabilityZone2
+      CidrBlock: 10.0.21.0/24
+      MapPublicIpOnLaunch: false
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'private', '-', !Ref Environment, '-b' ] ]
+      VpcId: !Ref VPC
+
+  # Network Interfaces and ElasticIP
+  ElasticIPBastion:
+    Type: AWS::EC2::EIP
+    Properties:
+      Domain: vpc
+
+  # Route Table for public subnet
+  RouteTablePublic:
+    Type: AWS::EC2::RouteTable
+    DependsOn: VPC
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'public', '-', !Ref Environment ] ]
+      VpcId: !Ref VPC
+  RoutePublic:
+    DependsOn: InternetGatewayAttachment
+    Type: AWS::EC2::Route
+    Properties:
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref InternetGateway
+      RouteTableId: !Ref RouteTablePublic
+  RouteTableAssociationPublicA:
+    DependsOn: SubnetPublicA
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPublicA
+      RouteTableId: !Ref RouteTablePublic
+  RouteTableAssociationPublicB:
+    DependsOn: SubnetPublicB
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPublicB
+      RouteTableId: !Ref RouteTablePublic
+
+  # Instances for public subnet (Bastion)
+  LaunchConfigBastion:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    DependsOn: VPC
+    Properties:
+      AssociatePublicIpAddress: true
+      ImageId: ami-8bfce8f2
+      InstanceMonitoring: false
+      InstanceType: t2.micro
+      KeyName: !Ref SshKey
+      SecurityGroups:
+        - !Ref SecurityGroupBastion
+      UserData:
+        Fn::Base64:
+          Fn::Join: ["",[
+            "#!/bin/bash\n\n",
+
+            "sudo yum update\n",
+
+            "aws configure set aws_access_key_id ", !Ref AwsAccessKeyId, "\n",
+            "aws configure set aws_secret_access_key ", !Ref AwsSecretAccessKey, "\n",
+            "aws configure set default.region ", !Ref Region, "\n",
+
+            "INSTANCEID=$(curl -s http://169.254.169.254/latest/meta-data/instance-id)\n",
+            "aws ec2 modify-instance-attribute --instance-id $INSTANCEID --source-dest-check '{\"Value\": false}'\n",
+
+            "ALLOCATIONID=", !GetAtt ElasticIPBastion.AllocationId, "\n",
+            "aws ec2 associate-address --instance-id $INSTANCEID --allocation-id $ALLOCATIONID --allow-reassociation\n",
+
+            "ROUTETABLEID=$(aws ec2 describe-route-tables  --filters 'Name=tag:Name,Values=", !Join [ '', [ 'private', '-', !Ref Environment ] ], "' --query 'RouteTables[0].RouteTableId' --output text)\n",
+            "aws ec2 delete-route --route-table-id $ROUTETABLEID --destination-cidr-block 0.0.0.0/0\n",
+            "aws ec2 create-route --route-table-id $ROUTETABLEID --destination-cidr-block 0.0.0.0/0 --instance-id $INSTANCEID\n"
+          ]]
+  AutoScalingGroupBastion:
+    DependsOn:
+      # Bastion UserData needs to ensure private routes exist before provisioning
+      - RouteTableAssociationPrivateA
+      - RouteTableAssociationPrivateB
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AvailabilityZones:
+        - !Ref AvailabilityZone1
+        - !Ref AvailabilityZone2
+      VPCZoneIdentifier:
+        - !Ref SubnetPublicA
+        - !Ref SubnetPublicB
+      DesiredCapacity: 1
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 300
+      LaunchConfigurationName: !Ref LaunchConfigBastion
+      MaxSize: 1
+      MinSize: 1
+      Tags:
+        - ResourceType: auto-scaling-group
+          ResourceId: !Join [ '', [ 'bastion', '-', !Ref Environment ] ]
+          PropagateAtLaunch: true
+          Key: Name
+          Value: !Join [ '', [ 'bastion', '-', !Ref Environment ] ]
+
+  # Route Table for 2 private subnets
+  # NOTE: Routes for private subnets are created during the provisioning of bastion via UserData
+  RouteTablePrivate:
+    DependsOn: VPC
+    Type: AWS::EC2::RouteTable
+    Properties:
+      Tags:
+        - Key: Name
+          Value: !Join [ '', [ 'private', '-', !Ref Environment ] ]
+      VpcId: !Ref VPC
+  RouteTableAssociationPrivateA:
+    DependsOn: SubnetPrivateA
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPrivateA
+      RouteTableId: !Ref RouteTablePrivate
+  RouteTableAssociationPrivateB:
+    DependsOn: SubnetPrivateB
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref SubnetPrivateB
+      RouteTableId: !Ref RouteTablePrivate
+
+  # Instances for private subnets (2 instances for ECS Cluster)
+  LaunchConfigCluster:
+    Type: AWS::AutoScaling::LaunchConfiguration
+    DependsOn: VPC
+    Properties:
+      AssociatePublicIpAddress: false
+      IamInstanceProfile: !Ref InstanceProfileEcsInstance
+      ImageId: ami-57d9cd2e
+      InstanceMonitoring: true
+      InstanceType: m3.medium
+      KeyName: !Ref SshKey
+      SecurityGroups:
+        - !Ref SecurityGroupPrivate
+      SpotPrice: 0.014
+      UserData:
+        Fn::Base64:
+          Fn::Join: ["",[
+            "#!/usr/bin/env bash\n",
+            "sudo yum update\n",
+            "echo ECS_CLUSTER=", !Join [ '', [ 'web', '-', !Ref Environment ] ], " >> /etc/ecs/ecs.config"
+          ]]
+  AutoScalingGroupCluster:
+    Type: AWS::AutoScaling::AutoScalingGroup
+    Properties:
+      AvailabilityZones:
+        - !Ref AvailabilityZone1
+        - !Ref AvailabilityZone2
+      VPCZoneIdentifier:
+        - !Ref SubnetPrivateA
+        - !Ref SubnetPrivateB
+      DesiredCapacity: 2
+      HealthCheckType: EC2
+      HealthCheckGracePeriod: 300
+      LaunchConfigurationName: !Ref LaunchConfigCluster
+      MaxSize: 2
+      MinSize: 1
+      Tags:
+        - ResourceType: auto-scaling-group
+          ResourceId: !Join [ '', [ 'ecs-cluster', '-', !Ref Environment ] ]
+          PropagateAtLaunch: true
+          Key: Name
+          Value: !Join [ '', [ 'ecs-cluster', '-', !Ref Environment ] ]
+
+  # ECS Cluster
+  ClusterWeb:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Join [ '', [ 'web', '-', !Ref Environment ] ]
+
+  # Application Load Balancer
+  ALBOsirocom:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Join [ '', [ !Ref Environment, '-osirocom' ] ]
+      Scheme: internet-facing
+      SecurityGroups:
+        - !Ref SecurityGroupPublic
+      Subnets:
+        - !Ref SubnetPublicA
+        - !Ref SubnetPublicB
+
+  TargetGroupOsirocom:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 60
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 5
+      HealthyThresholdCount: 5
+      Matcher:
+        HttpCode: '200,301'
+      Name: !Join [ '', [ !Ref Environment, '-osirocom' ] ]
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      VpcId: !Ref VPC
+
+  ALBHttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroupOsirocom
+      LoadBalancerArn: !Ref ALBOsirocom
+      Port: 80
+      Protocol: HTTP
+
+  ALBHttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroupOsirocom
+      LoadBalancerArn: !Ref ALBOsirocom
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS-1-2-2017-01
+
+Outputs:
+  ArchitectureRegion:
+    Description: For AWS CLI. The region to use. Overrides config/env settings.
+    Value: !Ref Region
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-Region"
+  ArchitectureEnvironment:
+    Description: Environment
+    Value: !Ref Environment
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-Environment"
+  ECSClusterName:
+    Description: Name of created cluster
+    Value: !Ref ClusterWeb
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-WebCluster"
+  ECSTargetGroup:
+    Description: ARN of target group
+    Value: !Ref TargetGroupOsirocom
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-ECSTargetGroup"
+  ECSRoleEcsInstanceName:
+    Description: ecsInstanceRole
+    Value: !Ref RoleEcsInstance
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-ECSRoleEcsInstanceName"
+  ECSRoleEcsInstanceArn:
+    Description: ecsInstanceRole
+    Value: !GetAtt RoleEcsInstance.Arn
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-ECSRoleEcsInstanceArn"
