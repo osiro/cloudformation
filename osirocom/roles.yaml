@@ -1,0 +1,198 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Resources:
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codebuild.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: ECRMaintainerPolicy
+          PolicyDocument:
+            Statement:
+              -
+                Action:
+                  - ecr:*
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - codecommit:GitPull
+                Effect: Allow
+                Resource: '*'
+      RoleName: CodeBuildRole
+
+  BastionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: ModifyInstance
+          PolicyDocument:
+            Statement:
+              -
+                Action:
+                  - ec2:Describe
+                  - ec2:ModifyInstanceAttribute
+                  - ec2:DescribeRouteTables
+                  - ec2:AssociateAddress
+                  - ec2:DeleteRoute
+                  - ec2:CreateRoute
+                Effect: Allow
+                Resource: '*'
+      RoleName: BastionRole
+
+  ECSServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - ecs.amazonaws.com
+                - application-autoscaling.amazonaws.com
+                - ec2.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceRole
+        - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole
+      RoleName: ECSServiceRole
+
+  CloudFormationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - cloudformation.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: root
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - ecs:*
+                  - ecr:*
+                  - iam:*
+                  - application-autoscaling:*
+                  - cloudwatch:*
+      RoleName: CloudFormationRole
+
+  CodePipelineRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - codepipeline.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: CodePipelineService
+          PolicyDocument:
+            Statement:
+              - Resource: "*"
+                Effect: Allow
+                Action:
+                  - s3:PutObject
+                  - s3:GetObject
+                  - s3:GetObjectVersion
+                  - s3:GetBucketVersioning
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                  - cloudformation:*
+                  - iam:PassRole
+                  - codecommit:BatchGetRepositories
+                  - codecommit:Get*
+                  - codecommit:List*
+                  - codecommit:GitPull
+                  - codecommit:CancelUploadArchive
+                  - codecommit:GetUploadArchiveStatus
+                  - codecommit:UploadArchive
+      RoleName: CodePipelineRole
+
+Outputs:
+  CoreCodeBuildRole:
+    Description: CodeBuildRole
+    Value: !Ref CodeBuildRole
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-CodeBuildRole"
+
+  CoreBastionRole:
+    Description: BastionRole
+    Value: !Ref BastionRole
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-BastionRole"
+
+  CoreECSServiceRole:
+    Description: ECSServiceRole
+    Value: !Ref ECSServiceRole
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-ECSServiceRole"
+
+  CoreCloudFormationRole:
+    Description: CloudFormationRole
+    Value: !Ref CloudFormationRole
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-CloudFormationRole"
+
+  CoreCodePipelineRole:
+    Description: CodePipelineRole
+    Value: !Ref CodePipelineRole
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-CodePipelineRole"
+
+  CoreCodePipelineRoleArn:
+    Description: CodePipelineRole
+    Value: !GetAtt CodePipelineRole.Arn
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-CoreCodePipelineRoleArn"
+
+  CoreECSServiceRoleArn:
+    Description: ECSServiceRole
+    Value: !GetAtt ECSServiceRole.Arn
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-ECSServiceRoleArn"

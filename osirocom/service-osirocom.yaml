@@ -1,0 +1,281 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+  CoreStackName:
+    Type: String
+    Description: Micro Services Cloud Formation Stack Name
+    Default: production-core
+    AllowedValues:
+      - production-core
+      - staging-core
+  RolesStackName:
+    Type: String
+    Description: Roles Cloud Formation Stack Name
+    Default: roles
+  Tag:
+    Type: String
+    Description: The image tag to use for a container, which is passed directly to the Docker daemon
+    Default: latest
+  ApplicationName:
+    Type: String
+    Description: An name that will be prefixed to resource names.
+  ApplicationType:
+    Type: String
+    Description: "An name that will be suffixed to resource names. E.G: web, processing, scheduling, etc."
+    Default: web
+    MaxLength: 5
+  CertificateArn:
+    Type: String
+    Description: Certificate that you can use with AWS services to enable secure connections.
+  ContainerCommand:
+    Type: CommaDelimitedList
+    Description: "Command to start the Docker container. E.G: foreman,start,--no-timestamp"
+    Default: "foreman,start,--no-timestamp"
+  MicroServicePath:
+    Type: String
+  MaxCapacity:
+    Type: Number
+    Description: The maximum value that Application Auto Scaling can use to scale a target during a scaling activity.
+    Default: 1
+
+Resources:
+  TargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthCheckIntervalSeconds: 60
+      HealthCheckPath: /
+      HealthCheckProtocol: HTTP
+      HealthCheckTimeoutSeconds: 2
+      HealthyThresholdCount: 2
+      Matcher:
+        HttpCode: '200,301'
+      Name:
+        Fn::Join: [ '', [ !Ref ApplicationName, '-', !Ref ApplicationType, '-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+      Port: 80
+      Protocol: HTTP
+      UnhealthyThresholdCount: 2
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${CoreStackName}-VPC"
+
+  ALBHttpListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      LoadBalancerArn:
+        Fn::ImportValue:
+          !Sub "${CoreStackName}-ALB"
+      Port: 80
+      Protocol: HTTP
+
+  ALBHttpsListener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    Properties:
+      Certificates:
+        - CertificateArn: !Ref CertificateArn
+      DefaultActions:
+        - Type: forward
+          TargetGroupArn: !Ref TargetGroup
+      LoadBalancerArn:
+        Fn::ImportValue:
+          !Sub "${CoreStackName}-ALB"
+      Port: 443
+      Protocol: HTTPS
+      SslPolicy: ELBSecurityPolicy-TLS-1-2-2017-01
+
+  HttpListenerRule:
+    DependsOn: ALBHttpListener
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+      - Type: forward
+        TargetGroupArn: !Ref TargetGroup
+      Conditions:
+      - Field: path-pattern
+        Values:
+          - !Ref MicroServicePath
+      ListenerArn: !Ref ALBHttpListener
+      Priority: 1
+
+  HttpsListenerRule:
+    DependsOn: ALBHttpsListener
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+      - Type: forward
+        TargetGroupArn: !Ref TargetGroup
+      Conditions:
+      - Field: path-pattern
+        Values:
+          - !Ref MicroServicePath
+      ListenerArn: !Ref ALBHttpsListener
+      Priority: 1
+
+  TaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family:
+        Fn::Join: [ '', [ !Ref ApplicationName, '-', !Ref ApplicationType, '-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+      NetworkMode: bridge
+      ContainerDefinitions:
+        - Name:
+            Fn::Join: [ '', [ !Ref ApplicationName, '-', !Ref ApplicationType, '-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+          Cpu: 128 # For reference, a m3.medium provides 1024 CPU units. Therefore it is able to host a max of 8 containers of 128 CPU units
+          Command: !Ref ContainerCommand
+          Environment:
+            - Name: RAILS_ENV
+              Value:
+                Fn::ImportValue: !Sub '${CoreStackName}-Environment'
+          Essential: true
+          Image: !Join [ '', [ '127726907293.dkr.ecr.us-west-2.amazonaws.com/osirocom:', !Ref Tag ] ]
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::Join: [ '', [ 'micro-services-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: !Join [ '', [ !Ref ApplicationName, '-', !Ref ApplicationType ] ]
+          Memory: 470 # For reference, a m3.medium provides 3765 MB. Therefore it is able to host a max of 8 containers of 470MB
+          PortMappings:
+            - ContainerPort: 80
+              HostPort: 0 # Dynamic
+              Protocol: tcp
+  Service:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster:
+        Fn::ImportValue:
+          !Sub "${CoreStackName}-Cluster"
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 50
+      DesiredCount: 1
+      LoadBalancers:
+        - ContainerName:
+            Fn::Join: [ '', [ !Ref ApplicationName, '-', !Ref ApplicationType, '-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+          ContainerPort: 80
+          TargetGroupArn: !Ref TargetGroup
+      PlacementStrategies:
+        - Type: spread
+          Field: attribute:ecs.availability-zone
+      Role:
+        Fn::ImportValue: !Sub "${RolesStackName}-ECSServiceRole"
+      ServiceName:
+          Fn::Join: [ '', [ !Ref ApplicationName, '-', !Ref ApplicationType, '-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+      TaskDefinition: !Ref TaskDefinition
+
+  ScalableTarget:
+    DependsOn: Service
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    Properties:
+      MaxCapacity: !Ref MaxCapacity
+      MinCapacity: 2
+      ResourceId:
+        Fn::Join: [ '', [ 'service/', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Cluster' }, '/', !GetAtt Service.Name ] ]
+      RoleARN:
+        Fn::ImportValue: !Sub "${RolesStackName}-ECSServiceRoleArn"
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+
+  ScaleOutPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Join [ '', [ 'scale-out-web-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ScalableTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 30
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalLowerBound: 0
+            ScalingAdjustment: 3
+
+  ScaleInPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    Properties:
+      PolicyName: !Join [ '', [ 'scale-in-web-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+      PolicyType: StepScaling
+      ScalingTargetId: !Ref ScalableTarget
+      StepScalingPolicyConfiguration:
+        AdjustmentType: ChangeInCapacity
+        Cooldown: 120
+        MetricAggregationType: Average
+        StepAdjustments:
+          - MetricIntervalUpperBound: -20
+            ScalingAdjustment: -1
+
+  AlarmCPUHigh:
+    DependsOn: Service
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref ScaleOutPolicy
+      AlarmDescription:
+        Fn::Join: [ '', [ 'High CPU Utilisation for', !Ref ApplicationName, ' ', !Ref ApplicationType, ' - ', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+      AlarmName:
+        Fn::Join: [ '', [ 'high-cpu-utilisation-', !Ref ApplicationName, '-', !Ref ApplicationType, '-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: ClusterName
+          Value:
+            Fn::ImportValue:
+              Fn::Sub: '${CoreStackName}-Cluster'
+        - Name: ServiceName
+          Value: !GetAtt Service.Name
+      EvaluationPeriods: 1
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      OKActions:
+        - !Ref ScaleInPolicy
+      Period: 60
+      Statistic: Average
+      Threshold: 60
+      TreatMissingData: breaching
+
+Outputs:
+  ApplicationTargetGroup:
+    Description: Task Definition
+    Value: !Ref TargetGroup
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-TargetGroup"
+  ApplicationALBHttpListener:
+    Description: ALB HTTP Listener
+    Value: !Ref ALBHttpListener
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-ALBHttpListener"
+  ApplicationALBHttpsListener:
+    Description: ALB HTTPS Listener
+    Value: !Ref ALBHttpsListener
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-ALBHttpsListener"
+  ApplicationHttpListenerRule:
+    Description: HTTP Listener Rule
+    Value: !Ref HttpListenerRule
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-HttpListenerRule"
+  ApplicationHttpsListenerRule:
+    Description: HTTP Listener Rule
+    Value: !Ref HttpsListenerRule
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-HttpsListenerRule"
+  ApplicationService:
+    Description: Name of Web ECS service
+    Value: !GetAtt Service.Name
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-ECSService"
+  ApplicationTaskDefinition:
+    Description: Task Definition
+    Value: !Ref TaskDefinition
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-ECSTaskDefinition"

@@ -1,0 +1,87 @@
+AWSTemplateFormatVersion: '2010-09-09'
+
+Parameters:
+  RolesStackName:
+    Type: String
+    Description: Roles Cloud Formation Stack Name
+    Default: roles
+
+Resources:
+  ArtifactBucket:
+    Type: AWS::S3::Bucket
+    DeletionPolicy: Retain
+
+  Pipeline:
+    Type: AWS::CodePipeline::Pipeline
+    Properties:
+      RoleArn:
+        Fn::ImportValue: !Sub "${RolesStackName}-CoreCodePipelineRoleArn"
+      ArtifactStore:
+        Type: S3
+        Location: !Ref ArtifactBucket
+      Stages:
+        - Name: Source
+          Actions:
+            - Name: App
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: CodeCommit
+              Configuration:
+                RepositoryName: osirocom
+                BranchName: master
+              OutputArtifacts:
+                - Name: CodeCommitApp
+              RunOrder: 1
+            - Name: Template
+              ActionTypeId:
+                Category: Source
+                Owner: AWS
+                Version: 1
+                Provider: S3
+              OutputArtifacts:
+                - Name: CloudFormationServiceTemplate
+              RunOrder: 1
+              Configuration:
+                S3Bucket: ecs-services-templates
+                S3ObjectKey: osirocom.zip
+        - Name: Build
+          Actions:
+            - Name: Build
+              ActionTypeId:
+                Category: Build
+                Owner: AWS
+                Version: 1
+                Provider: CodeBuild
+              Configuration:
+                ProjectName: osirocom
+              InputArtifacts:
+                - Name: CodeCommitApp
+              OutputArtifacts:
+                - Name: CodeBuildArtifact
+              RunOrder: 1
+        - Name: Deploy
+          Actions:
+            - Name: Deploy
+              ActionTypeId:
+                Category: Deploy
+                Owner: AWS
+                Version: 1
+                Provider: CloudFormation
+              Configuration:
+                ChangeSetName: Deploy
+                ActionMode: CREATE_UPDATE
+                StackName: production-osirocom
+                Capabilities: CAPABILITY_NAMED_IAM
+                TemplateConfiguration: CloudFormationServiceTemplate::configuration.json
+                TemplatePath: CloudFormationServiceTemplate::service.yaml
+                RoleArn: arn:aws:iam::127726907293:role/CloudFormationRole
+                ParameterOverrides: !Sub |
+                  {
+                    "Tag" : { "Fn::GetParam" : [ "CodeBuildArtifact", "build.json", "tag" ] }
+                  }
+              InputArtifacts:
+                - Name: CodeBuildArtifact
+                - Name: CloudFormationServiceTemplate
+              RunOrder: 1
