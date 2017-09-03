@@ -108,6 +108,7 @@ Resources:
                   - iam:*
                   - application-autoscaling:*
                   - cloudwatch:*
+                  - elasticloadbalancing:*
       RoleName: CloudFormationRole
 
   CodePipelineRole:

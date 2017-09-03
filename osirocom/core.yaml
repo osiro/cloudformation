@@ -300,7 +300,7 @@ Resources:
     DependsOn: VPC
     Properties:
       AssociatePublicIpAddress: false
-      ImageId: ami-57d9cd2e
+      ImageId: ami-1d668865
       InstanceMonitoring: true
       IamInstanceProfile: !Ref ECSServiceInstanceProfile
       InstanceType: m3.medium
@@ -357,7 +357,6 @@ Resources:
     DependsOn:
       - AutoScalingGroupCluster
       - UpScalingCluster
-      - DownScalingCluster
       - Cluster
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -373,12 +372,34 @@ Resources:
       EvaluationPeriods: 1
       MetricName: CPUReservation
       Namespace: AWS/ECS
-      OKActions:
-        - !Ref DownScalingCluster
       Period: 300
       Statistic: Average
       Threshold: 60
       TreatMissingData: breaching
+
+  AlarmCPUReservationLow:
+    DependsOn:
+      - AutoScalingGroupCluster
+      - DownScalingCluster
+      - Cluster
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref DownScalingCluster
+      AlarmDescription: !Join [ '', [ 'Low CPU Reservation for Cluster micro-services-', !Ref Environment ] ]
+      AlarmName: !Join [ '', [ 'low-cpu-reservation-micro-services-', !Ref Environment ] ]
+      ComparisonOperator: LessThanOrEqualToThreshold
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref Cluster
+      EvaluationPeriods: 1
+      MetricName: CPUReservation
+      Namespace: AWS/ECS
+      Period: 300
+      Statistic: Average
+      Threshold: 30
+      TreatMissingData: notBreaching
 
   # ECS Cluster
   Cluster:

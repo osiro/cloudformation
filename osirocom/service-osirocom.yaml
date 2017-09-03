@@ -29,14 +29,10 @@ Parameters:
     Description: Certificate that you can use with AWS services to enable secure connections.
   ContainerCommand:
     Type: CommaDelimitedList
-    Description: "Command to start the Docker container. E.G: foreman,start,--no-timestamp"
-    Default: "foreman,start,--no-timestamp"
+    Description: "Command to start the Docker container. E.G: eye,l,service.eye,-f"
+    Default: "eye,l,service.eye,-f"
   MicroServicePath:
     Type: String
-  MaxCapacity:
-    Type: Number
-    Description: The maximum value that Application Auto Scaling can use to scale a target during a scaling activity.
-    Default: 1
 
 Resources:
   TargetGroup:
@@ -48,7 +44,7 @@ Resources:
       HealthCheckTimeoutSeconds: 2
       HealthyThresholdCount: 2
       Matcher:
-        HttpCode: '200,301'
+        HttpCode: '301'
       Name:
         Fn::Join: [ '', [ !Ref ApplicationName, '-', !Ref ApplicationType, '-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
       Port: 80
@@ -170,8 +166,8 @@ Resources:
     DependsOn: Service
     Type: AWS::ApplicationAutoScaling::ScalableTarget
     Properties:
-      MaxCapacity: !Ref MaxCapacity
-      MinCapacity: 2
+      MaxCapacity: 32
+      MinCapacity: 1
       ResourceId:
         Fn::Join: [ '', [ 'service/', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Cluster' }, '/', !GetAtt Service.Name ] ]
       RoleARN:
@@ -229,12 +225,37 @@ Resources:
       EvaluationPeriods: 1
       MetricName: CPUUtilization
       Namespace: AWS/ECS
-      OKActions:
-        - !Ref ScaleInPolicy
       Period: 60
       Statistic: Average
       Threshold: 60
       TreatMissingData: breaching
+
+  AlarmCPULow:
+    DependsOn: Service
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      ActionsEnabled: true
+      AlarmActions:
+        - !Ref ScaleInPolicy
+      AlarmDescription:
+        Fn::Join: [ '', [ 'Low CPU Utilisation for', !Ref ApplicationName, ' ', !Ref ApplicationType, ' - ', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+      AlarmName:
+        Fn::Join: [ '', [ 'low-cpu-utilisation-', !Ref ApplicationName, '-', !Ref ApplicationType, '-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+      ComparisonOperator: LessThanOrEqualToThreshold
+      Dimensions:
+        - Name: ClusterName
+          Value:
+            Fn::ImportValue:
+              Fn::Sub: '${CoreStackName}-Cluster'
+        - Name: ServiceName
+          Value: !GetAtt Service.Name
+      EvaluationPeriods: 1
+      MetricName: CPUUtilization
+      Namespace: AWS/ECS
+      Period: 180
+      Statistic: Average
+      Threshold: 30
+      TreatMissingData: notBreaching
 
 Outputs:
   ApplicationTargetGroup:
