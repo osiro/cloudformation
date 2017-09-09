@@ -109,6 +109,8 @@ Resources:
                   - application-autoscaling:*
                   - cloudwatch:*
                   - elasticloadbalancing:*
+                  - s3:*
+                  - cloudfront:*
       RoleName: CloudFormationRole
 
   CodePipelineRole:

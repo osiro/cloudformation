@@ -20,9 +20,6 @@ Parameters:
       - production
       - staging
 
-Conditions:
-  CreateSpotInstances: !Equals [ !Ref Environment, staging ]
-
 Resources:
   # Users, Groups, Roles and Policies
   BastionInstanceProfile:
@@ -307,7 +304,7 @@ Resources:
       KeyName: !Ref KeyPair
       SecurityGroups:
         - !Ref SecurityGroupPrivate
-      SpotPrice: !If [ CreateSpotInstances, !Ref SpotPrice, !Ref "AWS::NoValue" ]
+      SpotPrice: !Ref SpotPrice
       UserData:
         Fn::Base64:
           Fn::Join: ["",[
