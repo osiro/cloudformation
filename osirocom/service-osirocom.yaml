@@ -231,7 +231,7 @@ Resources:
       EvaluationPeriods: 1
       MetricName: CPUUtilization
       Namespace: AWS/ECS
-      Period: 60
+      Period: 180
       Statistic: Average
       Threshold: 60
       TreatMissingData: breaching
