@@ -82,6 +82,36 @@ Resources:
         - arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceAutoscaleRole
       RoleName: ECSServiceRole
 
+  LambdaRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - edgelambda.amazonaws.com
+                - lambda.amazonaws.com
+            Action:
+              - sts:AssumeRole
+      Path: '/'
+      Policies:
+        - PolicyName: BasicLambdaActions
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Resource:
+                  - arn:aws:logs:*:*:*
+                  - arn:aws:kms:*:*:*
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - kms:Decrypt
+      RoleName: LambdaRole
+
   CloudFormationRole:
     Type: AWS::IAM::Role
     Properties:
@@ -111,6 +141,9 @@ Resources:
                   - elasticloadbalancing:*
                   - s3:*
                   - cloudfront:*
+                  - sns:*
+                  - lambda:*
+                  - kms:*
       RoleName: CloudFormationRole
 
   CodePipelineRole:
@@ -171,6 +204,13 @@ Outputs:
     Export:
       Name:
         !Sub "${AWS::StackName}-ECSServiceRole"
+
+  CoreLambdaRoleArn:
+    Description: LambdaRole
+    Value: !GetAtt LambdaRole.Arn
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-LambdaRoleArn"
 
   CoreCloudFormationRole:
     Description: CloudFormationRole

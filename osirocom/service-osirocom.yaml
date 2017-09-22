@@ -39,8 +39,57 @@ Parameters:
   CloudfrontCertificateArn:
     Type: String
     Description: ARN of an AWS Certificate Manager (ACM) certificate
+  LambdaKMS:
+    Type: String
+    Description: ARN of an AWS KMS key that Lambda uses to encrypt and decrypt environment variable values.
 
 Resources:
+
+  NotifierLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: osirocom-lambda-functions
+        S3Key: slackNotifier.zip
+      Description: Sends notifications to Slack
+      Environment:
+        Variables:
+          slackChannel: '#general'
+          kmsEncryptedHookUrl: 'AQICAHg7dtXrx+sEQYQUZylNnFCByO2H3Lblmq5jBUIogFj9VwFZ83MgBPiKy5o+1kJhrBRZAAAApzCBpAYJKoZIhvcNAQcGoIGWMIGTAgEAMIGNBgkqhkiG9w0BBwEwHgYJYIZIAWUDBAEuMBEEDDxIopEHeypgq2z5iAIBEIBgSH+d4/o0tUWoWKB4KNk4o7WgOHruOSjicGOyb4SflRQ+BGvTO4BVVRDxEcioVp9Twt2C2zyHGWEhJJMtbp9wU704XrBz8bt1ZR2ms4cV+/mIXoZbT8zOcpTyPsXOqmxU'
+      FunctionName: slackNotifier
+      Handler: index.handler
+      KmsKeyArn: !Ref LambdaKMS
+      Role:
+        Fn::ImportValue:
+          !Sub "${RolesStackName}-LambdaRoleArn"
+      Runtime: nodejs4.3
+      Tags:
+        - Key: Name
+          Value:
+            Fn::ImportValue:
+              !Sub "${CoreStackName}-Environment"
+
+  NotificationTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: Operations Notifier
+      TopicName: operations-notifier
+
+  NotificationSubscriptions:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !GetAtt NotifierLambda.Arn
+      Protocol: lambda
+      TopicArn: !Ref NotificationTopic
+
+  NotifierLambdaPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      Principal: sns.amazonaws.com
+      SourceArn: !Ref NotificationTopic
+      FunctionName: !GetAtt NotifierLambda.Arn
+
   TargetGroup:
     Type: AWS::ElasticLoadBalancingV2::TargetGroup
     Properties:
