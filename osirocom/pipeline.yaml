@@ -5,6 +5,9 @@ Parameters:
     Type: String
     Description: Roles Cloud Formation Stack Name
     Default: roles
+  SlackLambdaArn:
+    Type: String
+    Description: Lambda to send CodePipeline notifications to
 
 Resources:
   ArtifactBucket:
@@ -85,3 +88,35 @@ Resources:
                 - Name: CodeBuildArtifact
                 - Name: CloudFormationServiceTemplate
               RunOrder: 1
+
+  EventRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: Monitor CodePipeline Progress by sending messages to Slack
+      EventPattern:
+        source:
+          - aws.codepipeline
+        detail-type:
+          - "CodePipeline Action Execution State Change"
+      Name: CodePipelineNotifier
+      State: ENABLED
+      Targets:
+        -
+          Arn: !Ref SlackLambdaArn
+          Id: CloudWatchEventToLambda
+          InputTransformer:
+            InputPathsMap:
+              stage: "$.detail.stage"
+              action: "$.detail.action"
+              startedAt: "$.time"
+              state: "$.detail.state"
+              type: "$.detail-type"
+            InputTemplate: '"{\"title\" : \"<type>\", \"content\" : \"Stage: <stage>\\nAction: <action>\\nStatus: <state>\\nStarted at: <startedAt>\", \"messageLevel\" : \"warning\"}"'
+
+  PermissionForEventsToInvokeLambda:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref SlackLambdaArn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventRule.Arn

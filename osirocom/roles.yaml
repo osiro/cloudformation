@@ -93,6 +93,7 @@ Resources:
               Service:
                 - edgelambda.amazonaws.com
                 - lambda.amazonaws.com
+                - codepipeline.amazonaws.com
             Action:
               - sts:AssumeRole
       Path: '/'
@@ -110,6 +111,11 @@ Resources:
                   - logs:CreateLogStream
                   - logs:PutLogEvents
                   - kms:Decrypt
+              - Resource: '*'
+                Effect: Allow
+                Action:
+                  - codepipeline:PutJobSuccessResult
+                  - codepipeline:PutJobFailureResult
       RoleName: LambdaRole
 
   CloudFormationRole:
@@ -181,6 +187,19 @@ Resources:
                   - codecommit:CancelUploadArchive
                   - codecommit:GetUploadArchiveStatus
                   - codecommit:UploadArchive
+                  - lambda:GetAlias
+                  - lambda:GetEventSourceMapping
+                  - lambda:GetFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:GetPolicy
+                  - lambda:InvokeAsync
+                  - lambda:InvokeFunction
+                  - lambda:ListAliases
+                  - lambda:ListEventSourceMappings
+                  - lambda:ListFunctions
+                  - lambda:ListTags
+                  - lambda:ListVersionsByFunction
+                  - lambda:PublishVersion
       RoleName: CodePipelineRole
 
 Outputs:
