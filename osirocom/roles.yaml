@@ -116,6 +116,16 @@ Resources:
                 Action:
                   - codepipeline:PutJobSuccessResult
                   - codepipeline:PutJobFailureResult
+                  - ecs:DescribeTaskDefinition
+                  - ecs:DescribeTasks
+                  - ecs:ListClusters
+                  - ecs:ListContainerInstances
+                  - ecs:ListServices
+                  - ecs:ListTaskDefinitionFamilies
+                  - ecs:ListTaskDefinitions
+                  - ecs:ListTasks
+                  - ecs:RunTask
+                  - ecs:StartTask
       RoleName: LambdaRole
 
   CloudFormationRole:

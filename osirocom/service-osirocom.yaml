@@ -217,6 +217,53 @@ Resources:
           Fn::Join: [ '', [ !Ref ApplicationName, '-', !Ref ApplicationType, '-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
       TaskDefinition: !Ref TaskDefinition
 
+  TaskDefinitionMigration:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family:
+        Fn::Join: [ '', [ !Ref ApplicationName, '-migration-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+      NetworkMode: bridge
+      ContainerDefinitions:
+        - Name:
+            Fn::Join: [ '', [ !Ref ApplicationName, '-migration-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+          Cpu: 128 # For reference, a m3.medium provides 1024 CPU units. Therefore it is able to host a max of 8 containers of 128 CPU units
+          Command:
+            - 'rake'
+            - 'db:migrate'
+            - '-t'
+            - '-v'
+          Environment:
+            - Name: RAILS_ENV
+              Value:
+                Fn::ImportValue: !Sub '${CoreStackName}-Environment'
+          Essential: true
+          Image: !Join [ '', [ '127726907293.dkr.ecr.us-west-2.amazonaws.com/osirocom:', !Ref Tag ] ]
+          LogConfiguration:
+            LogDriver: awslogs
+            Options:
+              awslogs-group:
+                Fn::Join: [ '', [ 'micro-services-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+              awslogs-region: !Ref 'AWS::Region'
+              awslogs-stream-prefix: !Join [ '', [ !Ref ApplicationName, '-', !Ref ApplicationType ] ]
+          Memory: 470 # For reference, a m3.medium provides 3765 MB. Therefore it is able to host a max of 8 containers of 470MB
+
+  ServiceMigration:
+    Type: AWS::ECS::Service
+    Properties:
+      Cluster:
+        Fn::ImportValue:
+          !Sub "${CoreStackName}-Cluster"
+      DeploymentConfiguration:
+        MaximumPercent: 100
+        MinimumHealthyPercent: 0
+      DesiredCount: 0
+      PlacementStrategies:
+        - Type: spread
+          Field: attribute:ecs.availability-zone
+      ServiceName:
+          Fn::Join: [ '', [ !Ref ApplicationName, '-migration-', 'Fn::ImportValue': { 'Fn::Sub': '${CoreStackName}-Environment' } ] ]
+      TaskDefinition: !Ref TaskDefinitionMigration
+
   ScalableTarget:
     DependsOn: Service
     Type: AWS::ApplicationAutoScaling::ScalableTarget
@@ -421,6 +468,18 @@ Outputs:
     Export:
       Name:
         !Sub "${AWS::StackName}-ECSTaskDefinition"
+  ApplicationServiceMigration:
+    Description: Name of Migration ECS service
+    Value: !GetAtt ServiceMigration.Name
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-ECSMigrationService"
+  ApplicationTaskDefinitionMigration:
+    Description: Task Definition Migration
+    Value: !Ref TaskDefinitionMigration
+    Export:
+      Name:
+        !Sub "${AWS::StackName}-ECSTaskDefinitionMigration"
   ApplicationCloudfront:
     Description: Service Cloudfront
     Value: !Ref Cloudfront
