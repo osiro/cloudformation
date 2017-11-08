@@ -5,11 +5,68 @@ Parameters:
     Type: String
     Description: Roles Cloud Formation Stack Name
     Default: roles
-  SlackLambdaArn:
+  CoreStackName:
     Type: String
-    Description: Lambda to send CodePipeline notifications to
+    Description: Core Cloud Formation Stack Name
+  ServiceStackName:
+    Type: String
+    Description: ECS Service Cloud Formation Stack Name
+  LambdaKMS:
+    Type: String
+    Description: ARN of an AWS KMS key that Lambda uses to encrypt and decrypt environment variable values.
 
 Resources:
+  NotifierLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: osirocom-lambda-functions
+        S3Key: pipelineNotifier.zip
+      Description: Sends notifications from CodePipeline to Slack
+      Environment:
+        Variables:
+          slackChannel: '#pipeline'
+          kmsEncryptedHookUrl: 'AQICAHg7dtXrx+sEQYQUZylNnFCByO2H3Lblmq5jBUIogFj9VwFZ83MgBPiKy5o+1kJhrBRZAAAApzCBpAYJKoZIhvcNAQcGoIGWMIGTAgEAMIGNBgkqhkiG9w0BBwEwHgYJYIZIAWUDBAEuMBEEDDxIopEHeypgq2z5iAIBEIBgSH+d4/o0tUWoWKB4KNk4o7WgOHruOSjicGOyb4SflRQ+BGvTO4BVVRDxEcioVp9Twt2C2zyHGWEhJJMtbp9wU704XrBz8bt1ZR2ms4cV+/mIXoZbT8zOcpTyPsXOqmxU'
+      FunctionName: pipelineNotifier
+      Handler: index.handler
+      KmsKeyArn: !Ref LambdaKMS
+      Role:
+        Fn::ImportValue:
+          !Sub "${RolesStackName}-LambdaRoleArn"
+      Runtime: nodejs6.10
+      Tags:
+        - Key: Name
+          Value:
+            Fn::ImportValue:
+              !Sub "${CoreStackName}-Environment"
+
+  MigrationLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      Code:
+        S3Bucket: osirocom-lambda-functions
+        S3Key: dbMigrate.zip
+      Description: Run database migration
+      Environment:
+        Variables:
+          clusterName:
+            Fn::ImportValue:
+              !Sub "${CoreStackName}-Cluster"
+          taskDefName:
+            Fn::ImportValue:
+              !Sub "${ServiceStackName}-ECSMigrationService"
+      FunctionName: dbMigrate
+      Handler: index.handler
+      Role:
+        Fn::ImportValue:
+          !Sub "${RolesStackName}-LambdaRoleArn"
+      Runtime: nodejs6.10
+      Tags:
+        - Key: Name
+          Value:
+            Fn::ImportValue:
+              !Sub "${CoreStackName}-Environment"
+
   ArtifactBucket:
     Type: AWS::S3::Bucket
     DeletionPolicy: Retain
@@ -23,7 +80,7 @@ Resources:
         Type: S3
         Location: !Ref ArtifactBucket
       Stages:
-        - Name: Source
+        - Name: Gathering
           Actions:
             - Name: App
               ActionTypeId:
@@ -49,9 +106,9 @@ Resources:
               Configuration:
                 S3Bucket: ecs-services-templates
                 S3ObjectKey: osirocom.zip
-        - Name: Build
+        - Name: Building
           Actions:
-            - Name: Build
+            - Name: Test
               ActionTypeId:
                 Category: Build
                 Owner: AWS
@@ -64,7 +121,7 @@ Resources:
               OutputArtifacts:
                 - Name: CodeBuildArtifact
               RunOrder: 1
-        - Name: Deploy
+        - Name: Deployment
           Actions:
             - Name: Deploy
               ActionTypeId:
@@ -88,6 +145,15 @@ Resources:
                 - Name: CodeBuildArtifact
                 - Name: CloudFormationServiceTemplate
               RunOrder: 1
+            - Name: Migration
+              ActionTypeId:
+                Category: Invoke
+                Owner: AWS
+                Version: 1
+                Provider: Lambda
+              Configuration:
+                FunctionName: !Ref MigrationLambda
+              RunOrder: 2
 
   EventRule:
     Type: AWS::Events::Rule
@@ -102,21 +168,22 @@ Resources:
       State: ENABLED
       Targets:
         -
-          Arn: !Ref SlackLambdaArn
+          Arn: !GetAtt NotifierLambda.Arn
           Id: CloudWatchEventToLambda
           InputTransformer:
             InputPathsMap:
+              pipeline: "$.detail.pipeline"
+              type: "$.detail-type"
               stage: "$.detail.stage"
               action: "$.detail.action"
               startedAt: "$.time"
               state: "$.detail.state"
-              type: "$.detail-type"
-            InputTemplate: '"{\"title\" : \"<type>\", \"content\" : \"Stage: <stage>\\nAction: <action>\\nStatus: <state>\\nStarted at: <startedAt>\", \"messageLevel\" : \"warning\"}"'
+            InputTemplate: '"{ \"pipeline\":\"<pipeline>\", \"type\":\"<type>\", \"stage\":\"<stage>\", \"action\":\"<action>\", \"startedAt\":\"<startedAt>\", \"state\":\"<state>\" }"'
 
   PermissionForEventsToInvokeLambda:
     Type: AWS::Lambda::Permission
     Properties:
-      FunctionName: !Ref SlackLambdaArn
+      FunctionName: !Ref NotifierLambda
       Action: lambda:InvokeFunction
       Principal: events.amazonaws.com
       SourceArn: !GetAtt EventRule.Arn
